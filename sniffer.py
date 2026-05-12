@@ -16,6 +16,8 @@ DATA_TAB_4 = '\t\t\t\t   '
 
 
 def main():
+    #here is error in line 19 as socket.AF_PACKET is only available for linux if you are trying to run this code on windows you have to use the alternative of that which is 
+    #conn = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_IP)
     conn = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
     while True: 
         raw_data, addr = conn.recvfrom(65536)
