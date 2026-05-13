@@ -1,79 +1,115 @@
 import socket
 import struct
 import textwrap
+import sys
 
-#define our ethernet frame length 
+# Tab levels for pretty printing
 TAB_1 = '\t - '
-TAB_2 = '\t\t - '  
+TAB_2 = '\t\t - '
 TAB_3 = '\t\t\t - '
 TAB_4 = '\t\t\t\t - '
-#define our data tablevels for pretty printing 
+
 DATA_TAB_1 = '\t   '
-DATA_TAB_2 = '\t\t   '  
+DATA_TAB_2 = '\t\t   '
 DATA_TAB_3 = '\t\t\t   '
 DATA_TAB_4 = '\t\t\t\t   '
 
 
-
 def main():
-    #here is error in line 19 as socket.AF_PACKET is only available for linux if you are trying to run this code on windows you have to use the alternative of that which is 
-    #conn = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_IP)
-    conn = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
-    while True: 
-        raw_data, addr = conn.recvfrom(65536)
-        dest_mac, src_mac, eth_proto, data = ethernet_frame(raw_data)
-        print('\nEthernet Frame:')
-        print(TAB_1 + 'Destination: {}, Source: {}, Protocol: {}'.format(dest_mac, src_mac, eth_proto))     
-         
-         #* for ipv4
-        if eth_proto == 8:
-            (version, header_length, ttl, proto, src, target, data) = ipv4_packet(data)
-            print(TAB_1 + 'IPv4 Packet:')
-            print(TAB_2 + 'Version: {}, Header Length: {}, TTL: {}'.format(version, header_length, ttl))
-            print(TAB_2 + 'Protocol: {}, Source: {}, Target: {}'.format(proto, src, target))
+    if sys.platform == 'win32':
+        host = socket.gethostbyname(socket.gethostname())
+        conn = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_IP)
+        conn.bind((host, 0))
+        conn.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+        conn.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
+        print(f"[*] Sniffing on {host} (Windows mode) — run as Administrator!\n")
+    else:
+        conn = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
+        print("[*] Sniffing (Linux/macOS mode)\n")
 
-             #* for ICMP
-            if proto == 1:
-                icmp_type, code, checksum, data = icmp_packet(data)
-                print(TAB_1 + 'ICMP Packet:')
-                print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(icmp_type, code, checksum))
-                print(format_multi_line(DATA_TAB_3, data))
+    try:
+        while True:
+            raw_data, addr = conn.recvfrom(65536)
 
-             #* for TCP
-            elif proto == 6:
-                src_port, dest_port, sequence, acknowledgment, flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin, data = tcp_segment(data)
-                print(TAB_1 + 'TCP Segment:')
-                print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(src_port, dest_port))
-                print(TAB_2 + 'Sequence: {}, Acknowledgment: {}'.format(sequence, acknowledgment))
-                print(TAB_2 + 'Flags:')
-                print(TAB_3 + 'URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}'.format(flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin))
-                print(format_multi_line(DATA_TAB_3, data))
-
-             #* for UDP
-            elif proto == 17:
-                src_port, dest_port, size, data = udp_segment(data)
-                print(TAB_1 + 'UDP Segment:')
-                print(TAB_2 + 'Source Port: {}, Destination Port: {}, Size: {}'.format(src_port, dest_port, size))
-                print(format_multi_line(DATA_TAB_3, data))
-
-             #* for other IPv4 packets
+            if sys.platform == 'win32':
+                handle_ipv4_raw(raw_data)
             else:
-                print(TAB_1 + 'Other IPv4 Data:')
-                print(format_multi_line(DATA_TAB_2, data))
+                dest_mac, src_mac, eth_proto, data = ethernet_frame(raw_data)
+                print('\nEthernet Frame:')
+                print(TAB_1 + 'Destination: {}, Source: {}, Protocol: {}'.format(
+                    dest_mac, src_mac, eth_proto))
+
+                if eth_proto == 8:
+                    handle_ipv4(data)
+
+    except KeyboardInterrupt:
+        print("\n[*] Stopping sniffer.")
+        if sys.platform == 'win32':
+            conn.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
+        conn.close()
 
 
-#unpack ethernet frame
+def handle_ipv4(data):
+    version, header_length, ttl, proto, src, target, data = ipv4_packet(data)
+    print(TAB_1 + 'IPv4 Packet:')
+    print(TAB_2 + 'Version: {}, Header Length: {}, TTL: {}'.format(
+        version, header_length, ttl))
+    print(TAB_2 + 'Protocol: {}, Source: {}, Target: {}'.format(proto, src, target))
+    dispatch_protocol(proto, data)
+
+
+def handle_ipv4_raw(data):
+    version, header_length, ttl, proto, src, target, payload = ipv4_packet(data)
+    print('\nIPv4 Packet:')
+    print(TAB_1 + 'Version: {}, Header Length: {}, TTL: {}'.format(
+        version, header_length, ttl))
+    print(TAB_1 + 'Protocol: {}, Source: {}, Target: {}'.format(proto, src, target))
+    dispatch_protocol(proto, payload)
+
+
+def dispatch_protocol(proto, data):
+    if proto == 1:
+        icmp_type, code, checksum, data = icmp_packet(data)
+        print(TAB_1 + 'ICMP Packet:')
+        print(TAB_2 + 'Type: {}, Code: {}, Checksum: {}'.format(
+            icmp_type, code, checksum))
+        print(format_multi_line(DATA_TAB_3, data))
+
+    elif proto == 6:
+        (src_port, dest_port, sequence, acknowledgment,
+         flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin,
+         data) = tcp_segment(data)
+        print(TAB_1 + 'TCP Segment:')
+        print(TAB_2 + 'Source Port: {}, Destination Port: {}'.format(
+            src_port, dest_port))
+        print(TAB_2 + 'Sequence: {}, Acknowledgment: {}'.format(
+            sequence, acknowledgment))
+        print(TAB_2 + 'Flags:')
+        print(TAB_3 + 'URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}'.format(
+            flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin))
+        print(format_multi_line(DATA_TAB_3, data))
+
+    elif proto == 17:
+        src_port, dest_port, size, data = udp_segment(data)
+        print(TAB_1 + 'UDP Segment:')
+        print(TAB_2 + 'Source Port: {}, Destination Port: {}, Size: {}'.format(
+            src_port, dest_port, size))
+        print(format_multi_line(DATA_TAB_3, data))
+
+    else:
+        print(TAB_1 + 'Other IPv4 Data:')
+        print(format_multi_line(DATA_TAB_2, data))
+
+
 def ethernet_frame(data):
     dest_mac, src_mac, proto = struct.unpack('! 6s 6s H', data[:14])
     return get_mac_addr(dest_mac), get_mac_addr(src_mac), socket.htons(proto), data[14:]
 
-#return properly formatted mac address (like AA:BB:CC:DD:EE:FF)
+
 def get_mac_addr(bytes_addr):
-    bytes_str = map('{:02x}'.format, bytes_addr)
-    return ':'.join(bytes_str).upper()
+    return ':'.join('{:02x}'.format(b) for b in bytes_addr).upper()
 
 
-#Unpacking the ipv4 packet
 def ipv4_packet(data):
     version_header_length = data[0]
     version = version_header_length >> 4
@@ -81,18 +117,19 @@ def ipv4_packet(data):
     ttl, proto, src, target = struct.unpack('! 8x B B 2x 4s 4s', data[:20])
     return version, header_length, ttl, proto, ipv4(src), ipv4(target), data[header_length:]
 
-#Returns properly formatted IPv4 address
+
 def ipv4(addr):
     return '.'.join(map(str, addr))
 
-#Unpacking ICMP packet
+
 def icmp_packet(data):
     icmp_type, code, checksum = struct.unpack('! B B H', data[:4])
     return icmp_type, code, checksum, data[4:]
 
-#unpacking TCP segment
+
 def tcp_segment(data):
-    (src_port, dest_port, sequence, acknowledgment, offset_reserved_flags) = struct.unpack('! H H L L H', data[:14])
+    src_port, dest_port, sequence, acknowledgment, offset_reserved_flags = \
+        struct.unpack('! H H L L H', data[:14])
     offset = (offset_reserved_flags >> 12) * 4
     flag_urg = (offset_reserved_flags & 32) >> 5
     flag_ack = (offset_reserved_flags & 16) >> 4
@@ -100,20 +137,23 @@ def tcp_segment(data):
     flag_rst = (offset_reserved_flags & 4) >> 2
     flag_syn = (offset_reserved_flags & 2) >> 1
     flag_fin = offset_reserved_flags & 1
-    return src_port, dest_port, sequence, acknowledgment, flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin, data[offset:]
+    return (src_port, dest_port, sequence, acknowledgment,
+            flag_urg, flag_ack, flag_psh, flag_rst, flag_syn, flag_fin,
+            data[offset:])
 
-#unpacking UDP segment
+
 def udp_segment(data):
     src_port, dest_port, size = struct.unpack('! H H 2x H', data[:8])
     return src_port, dest_port, size, data[8:]
 
-#format multi-line data
+
 def format_multi_line(prefix, string, size=80):
     size -= len(prefix)
     if isinstance(string, bytes):
         string = ''.join(r'\x{:02x}'.format(byte) for byte in string)
         if size % 2:
             size -= 1
-    return '\n'.join([prefix + line for line in textwrap.wrap(string, size)])
+    return '\n'.join(prefix + line for line in textwrap.wrap(string, size))
+
 
 main()
